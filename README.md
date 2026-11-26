@@ -6,6 +6,8 @@ An interactive map that overlays **ancient Rome on modern Rome**. Pan and zoom l
 
 A personal project made for family and friends. It is a single static file (`index.html`) with no build step and no backend.
 
+Designed by Jack and built with [Claude](https://claude.ai), an AI assistant made by Anthropic, which wrote the page's code, curated the points of interest and drafted this README.
+
 ## Features
 
 - **Modern city layer** — current streets and buildings, with an opacity slider.
@@ -43,6 +45,10 @@ The ancient buildings, roads, walls and aqueducts come from **[OpenHistoricalMap
 
 - [Leaflet](https://leafletjs.com/) — map library (BSD 2-Clause).
 - [osmtogeojson](https://github.com/tyrasd/osmtogeojson) — converts Overpass data to GeoJSON (MIT).
+
+### Built with Claude
+
+The page's code, the point-of-interest captions and this README were written by Claude (Anthropic) working with Jack, who directed the design and reviewed the result. The map data itself comes entirely from the sources above.
 
 ## Running locally
 
