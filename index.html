@@ -91,6 +91,8 @@ const modern = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services
 // Panes: ancient stuff sits ABOVE the modern tiles so it is never hidden by them
 map.createPane('ancient'); map.getPane('ancient').style.zIndex = 450;
 
+map.attributionControl.addAttribution('Ancient layer: &copy; <a href="https://www.openhistoricalmap.org/copyright">OpenHistoricalMap</a> contributors (CC0)');
+
 // ---------------------------------------------------------------- categories
 const CATS = {
   forum:   { label:'Forums & civic',      color:'#b8860b' },
