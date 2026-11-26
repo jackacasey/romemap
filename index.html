@@ -1,0 +1,363 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>RomeMap — Ancient Rome under modern Rome</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+<style>
+  :root { --ink:#2b2118; --parch:#efe3c8; --accent:#9c3b1e; }
+  html, body { height:100%; margin:0; font-family: Georgia, "Times New Roman", serif; color:var(--ink); }
+  #map { height:100%; background:var(--parch); }
+
+  /* Modern tiles are multiplied onto the parchment so ancient layer shows through */
+  .modern-tiles { mix-blend-mode: multiply; }
+
+  .panel {
+    position:absolute; z-index:1000; top:12px; right:12px; width:250px;
+    background:rgba(255,250,238,.95); border:1px solid #c9b78f; border-radius:8px;
+    padding:12px 14px; box-shadow:0 2px 10px rgba(0,0,0,.25); font-size:14px;
+  }
+  .panel h1 { font-size:17px; margin:0 0 2px; color:var(--accent); }
+  .panel .sub { font-size:12px; opacity:.75; margin-bottom:10px; }
+  .panel label { display:block; font-weight:bold; margin:8px 0 3px; font-size:13px; }
+  .panel input[type=range] { width:100%; }
+  .row { display:flex; justify-content:space-between; font-size:11px; opacity:.7; }
+  .legend div { display:flex; align-items:center; gap:7px; margin:3px 0; font-size:13px; cursor:pointer; user-select:none; }
+  .dot { width:12px; height:12px; border-radius:50%; border:2px solid #fff; box-shadow:0 0 0 1px #5a4a35; flex:none; }
+  .off { opacity:.35; }
+  #status { font-size:11px; opacity:.7; margin-top:8px; }
+
+  .popup { width:240px; }
+  .popup img { width:100%; max-height:150px; object-fit:cover; border-radius:4px; margin-bottom:6px; background:#ddd; }
+  .popup h3 { margin:0; font-size:16px; }
+  .popup .anc { font-style:italic; font-size:12px; opacity:.75; margin-bottom:5px; }
+  .popup p { margin:4px 0 6px; font-size:13px; line-height:1.35; }
+  .popup a { color:var(--accent); font-weight:bold; }
+  .leaflet-popup-content { margin:10px 12px; }
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="panel">
+  <h1>RomeMap</h1>
+  <div class="sub">Ancient Rome beneath the modern city</div>
+
+  <label for="op">Modern city opacity</label>
+  <input type="range" id="op" min="0" max="100" value="55">
+  <div class="row"><span>Ancient only</span><span>Modern only</span></div>
+
+  <label for="year">Year: <span id="yearLabel">AD 250</span></label>
+  <input type="range" id="year" min="-100" max="450" step="10" value="250">
+  <div class="row"><span>100 BC</span><span>AD 450</span></div>
+
+  <label>Points of interest <span style="font-weight:normal;opacity:.6">(click to toggle)</span></label>
+  <div class="legend" id="legend"></div>
+
+  <label style="margin-top:10px;font-weight:normal"><input type="checkbox" id="ruins"> Show surviving ruins outlines (OSM)</label>
+  <div id="status"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/osmtogeojson@3.0.0-beta.5/osmtogeojson.js"></script>
+<script>
+// ---------------------------------------------------------------- map
+const map = L.map('map', { zoomControl:true }).setView([41.8925, 12.4853], 15);
+map.setMaxBounds([[41.83, 12.40], [41.95, 12.57]]);
+map.setMinZoom(13);
+
+// Modern layer (OpenStreetMap), opacity controlled by slider
+const modern = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/World_Street_Map/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 19, className: 'modern-tiles', opacity: 0.55,
+  attribution: 'Tiles &copy; Esri &mdash; Esri, HERE, Garmin, OpenStreetMap contributors'
+}).addTo(map);
+
+// Panes: ancient stuff sits ABOVE the modern tiles so it is never hidden by them
+map.createPane('ancient'); map.getPane('ancient').style.zIndex = 450;
+
+// ---------------------------------------------------------------- categories
+const CATS = {
+  forum:   { label:'Forums & civic',      color:'#b8860b' },
+  temple:  { label:'Temples',             color:'#2f6f8f' },
+  spectacle:{label:'Arenas & theatres',   color:'#a3271f' },
+  baths:   { label:'Baths',               color:'#3a8a5f' },
+  tomb:    { label:'Tombs & monuments',   color:'#6b4c9a' },
+  wall:    { label:'Walls, roads & infrastructure', color:'#5a4a35' },
+  christian:{label:'Early Christian',     color:'#c0397a' }
+};
+
+// ---------------------------------------------------------------- POIs
+// wiki = English Wikipedia article title (used for link, photo and summary)
+const POIS = [
+ {n:'Colosseum', a:'Amphitheatrum Flavium', c:'spectacle', ll:[41.8902,12.4922], wiki:'Colosseum',
+  t:'Opened in AD 80 under Titus; held roughly 50,000 spectators for gladiator games and spectacles.'},
+ {n:'Roman Forum', a:'Forum Romanum', c:'forum', ll:[41.8925,12.4853], wiki:'Roman_Forum',
+  t:'The political, religious and commercial heart of the city for over a thousand years.'},
+ {n:'Imperial Fora', a:'Fora Imperialia', c:'forum', ll:[41.8940,12.4856], wiki:'Imperial_fora',
+  t:'A chain of grand squares built by Caesar, Augustus, Vespasian, Nerva and Trajan.'},
+ {n:"Trajan's Forum & Markets", a:'Forum Traiani / Mercatus Traiani', c:'forum', ll:[41.8955,12.4863], wiki:"Trajan's_Market",
+  t:"A multi-level complex of shops and offices, often called the world's oldest shopping mall (c. AD 110)."},
+ {n:"Trajan's Column", a:'Columna Traiani', c:'tomb', ll:[41.8960,12.4842], wiki:"Trajan's_Column",
+  t:'A 30 m victory column, wrapped in a spiral relief of the Dacian Wars (AD 113).'},
+ {n:'Palatine Hill', a:'Mons Palatinus', c:'forum', ll:[41.8892,12.4875], wiki:'Palatine_Hill',
+  t:'Legendary birthplace of Rome and site of the imperial palaces — the origin of the word “palace”.'},
+ {n:'Circus Maximus', a:'Circus Maximus', c:'spectacle', ll:[41.8861,12.4851], wiki:'Circus_Maximus',
+  t:'The largest chariot-racing stadium ever built, seating well over 150,000 at its height.'},
+ {n:'Arch of Constantine', a:'Arcus Constantini', c:'tomb', ll:[41.8898,12.4906], wiki:'Arch_of_Constantine',
+  t:'Triumphal arch dedicated in AD 315 after Constantine’s victory at the Milvian Bridge.'},
+ {n:'Arch of Titus', a:'Arcus Titi', c:'tomb', ll:[41.8899,12.4887], wiki:'Arch_of_Titus',
+  t:'Built c. AD 81 to commemorate Titus’s siege of Jerusalem; model for many later arches.'},
+ {n:'Baths of Caracalla', a:'Thermae Antoninianae', c:'baths', ll:[41.8789,12.4923], wiki:'Baths_of_Caracalla',
+  t:'Vast bath complex finished in AD 216, with room for about 1,600 bathers at a time.'},
+ {n:'Baths of Diocletian', a:'Thermae Diocletiani', c:'baths', ll:[41.9033,12.4981], wiki:'Baths_of_Diocletian',
+  t:'The largest of the imperial baths (c. AD 306); part now houses Santa Maria degli Angeli.'},
+ {n:'Domus Aurea', a:'Domus Aurea', c:'forum', ll:[41.8905,12.4977], wiki:'Domus_Aurea',
+  t:'Nero’s “Golden House”, built after the Great Fire of AD 64; buried under later baths.'},
+ {n:'Pantheon', a:'Pantheon', c:'temple', ll:[41.8986,12.4769], wiki:'Pantheon,_Rome',
+  t:'Rebuilt by Hadrian c. AD 126; its unreinforced concrete dome remains the world’s largest of its kind.'},
+ {n:'Largo di Torre Argentina', a:'Area Sacra', c:'temple', ll:[41.8955,12.4768], wiki:'Largo_di_Torre_Argentina',
+  t:'Four Republican-era temples, and the site where Julius Caesar was assassinated in 44 BC.'},
+ {n:'Theatre of Marcellus', a:'Theatrum Marcelli', c:'spectacle', ll:[41.8920,12.4795], wiki:'Theatre_of_Marcellus',
+  t:'Dedicated by Augustus c. 12 BC; its arcaded facade inspired the Colosseum.'},
+ {n:'Piazza Navona (Stadium of Domitian)', a:'Stadium Domitiani', c:'spectacle', ll:[41.8992,12.4731], wiki:'Stadium_of_Domitian',
+  t:'The square keeps the exact oval shape of Domitian’s athletics stadium (AD 86).'},
+ {n:'Ara Pacis', a:'Ara Pacis Augustae', c:'temple', ll:[41.9063,12.4755], wiki:'Ara_Pacis',
+  t:'Altar of Augustan Peace (9 BC), covered in exquisitely carved processional reliefs.'},
+ {n:'Mausoleum of Augustus', a:'Mausoleum Augusti', c:'tomb', ll:[41.9060,12.4767], wiki:'Mausoleum_of_Augustus',
+  t:'Great circular tomb of the first emperor, built 28 BC.'},
+ {n:'Castel Sant’Angelo', a:'Mausoleum Hadriani', c:'tomb', ll:[41.9031,12.4663], wiki:'Castel_Sant%27Angelo',
+  t:'Began as Hadrian’s mausoleum (AD 139) before becoming a fortress and papal refuge.'},
+ {n:'Circus of Nero (Vatican)', a:'Circus Gai et Neronis', c:'spectacle', ll:[41.9022,12.4539], wiki:'Circus_of_Nero',
+  t:'Chariot circus whose spina was marked by the obelisk now standing in St Peter’s Square.'},
+ {n:'Pyramid of Cestius', a:'Pyramis Cestii', c:'tomb', ll:[41.8763,12.4813], wiki:'Pyramid_of_Cestius',
+  t:'A 36 m pyramid tomb (c. 12 BC), built into the Aurelian Wall.'},
+ {n:'Porta Maggiore', a:'Porta Praenestina', c:'wall', ll:[41.8905,12.5155], wiki:'Porta_Maggiore',
+  t:'Monumental gate where two aqueducts cross the road; later built into the Aurelian Wall.'},
+ {n:'Porta San Sebastiano', a:'Porta Appia', c:'wall', ll:[41.8607,12.5127], wiki:'Porta_San_Sebastiano',
+  t:'The best-preserved gate of the Aurelian Wall (AD 270s), start of the Appian Way.'},
+ {n:'Aurelian Walls', a:'Muri Aureliani', c:'wall', ll:[41.8750,12.5050], wiki:'Aurelian_Walls',
+  t:'19 km of walls begun under Aurelian in AD 271; still largely standing today.'},
+
+ // ---- Forum & Capitoline
+ {n:'Arch of Septimius Severus', a:'Arcus Septimii Severi', c:'tomb', ll:[41.8926,12.4850], wiki:'Arch_of_Septimius_Severus',
+  t:'Triumphal arch of AD 203 at the Forum’s northwest end, celebrating victories over the Parthians.'},
+ {n:'Temple of Saturn', a:'Aedes Saturni', c:'temple', ll:[41.8924,12.4846], wiki:'Temple_of_Saturn',
+  t:'Eight surviving columns of a temple that also housed the Roman state treasury.'},
+ {n:'Temple of Vesta', a:'Aedes Vestae', c:'temple', ll:[41.8921,12.4857], wiki:'Temple_of_Vesta',
+  t:'Round shrine where the Vestal Virgins tended Rome’s sacred, never-extinguished flame.'},
+ {n:'Curia Julia', a:'Curia Iulia', c:'forum', ll:[41.8928,12.4859], wiki:'Curia_Julia',
+  t:'The Senate House; the standing building is Diocletian’s rebuild of c. AD 283.'},
+ {n:'Basilica of Maxentius', a:'Basilica Maxentii', c:'forum', ll:[41.8918,12.4883], wiki:'Basilica_of_Maxentius',
+  t:'Colossal vaulted hall begun by Maxentius and finished by Constantine (AD 312); three great arches survive.'},
+ {n:'Temple of Venus and Roma', a:'Templum Veneris et Romae', c:'temple', ll:[41.8905,12.4898], wiki:'Temple_of_Venus_and_Roma',
+  t:'Rome’s largest temple, designed by Hadrian (dedicated AD 135) and facing both the Forum and the Colosseum.'},
+ {n:'Capitoline Hill', a:'Mons Capitolinus', c:'temple', ll:[41.8934,12.4828], wiki:'Temple_of_Jupiter_Optimus_Maximus',
+  t:'Site of the Temple of Jupiter Optimus Maximus, the religious center of the Roman state.'},
+ {n:'Tabularium', a:'Tabularium', c:'forum', ll:[41.8928,12.4837], wiki:'Tabularium',
+  t:'The state archive (78 BC), its arcade still dominating the Forum below the Capitoline.'},
+ {n:'Mamertine Prison', a:'Carcer Tullianum', c:'forum', ll:[41.8929,12.4846], wiki:'Mamertine_Prison',
+  t:'Rome’s ancient state prison, a cistern-like cell beneath the Capitoline slope.'},
+ {n:'Forum of Augustus', a:'Forum Augusti', c:'forum', ll:[41.8935,12.4867], wiki:'Forum_of_Augustus',
+  t:'Augustus’s forum (2 BC), centred on the Temple of Mars Ultor; three tall columns remain.'},
+ {n:'Insula of the Aracoeli', a:'Insula Aracoeli', c:'forum', ll:[41.8946,12.4826], wiki:'Insula_of_the_Aracoeli',
+  t:'Remains of a multi-storey Roman apartment block, showing how ordinary Romans lived.'},
+
+ // ---- Along the Tiber and Campus Martius
+ {n:'Column of Marcus Aurelius', a:'Columna Marci Aurelii', c:'tomb', ll:[41.9009,12.4807], wiki:'Column_of_Marcus_Aurelius',
+  t:'Victory column (c. AD 193) with spiral reliefs of the Marcomannic Wars.'},
+ {n:'Temple of Hadrian', a:'Hadrianeum', c:'temple', ll:[41.8995,12.4795], wiki:'Temple_of_Hadrian,_Rome',
+  t:'Eleven columns of the temple to the deified Hadrian are built into a later stock-exchange facade.'},
+ {n:'Tiber Island', a:'Insula Tiberina', c:'temple', ll:[41.8906,12.4776], wiki:'Tiber_Island',
+  t:'Rome’s island in the river, once home to a temple of Aesculapius, god of healing; still a hospital site.'},
+ {n:'Temple of Portunus', a:'Aedes Portuni', c:'temple', ll:[41.8883,12.4812], wiki:'Temple_of_Portunus',
+  t:'One of Rome’s best-preserved temples (c. 80–70 BC), in the old cattle market (Forum Boarium).'},
+ {n:'Cloaca Maxima', a:'Cloaca Maxima', c:'wall', ll:[41.8885,12.4807], wiki:'Cloaca_Maxima',
+  t:'One of the world’s earliest sewer systems, draining the Forum into the Tiber; still partly in use.'},
+ {n:'Ponte Sant’Angelo', a:'Pons Aelius', c:'wall', ll:[41.9060,12.4664], wiki:'Ponte_Sant%27Angelo',
+  t:'Hadrian’s bridge (AD 134) leading to his mausoleum; its central arches are original.'},
+ {n:'Monte Testaccio', a:'Mons Testaceus', c:'wall', ll:[41.8766,12.4757], wiki:'Monte_Testaccio',
+  t:'A 35 m hill made entirely of broken olive-oil amphorae, discarded at Rome’s river port.'},
+
+ // ---- Esquiline, Caelian and south
+ {n:'Baths of Trajan', a:'Thermae Traiani', c:'baths', ll:[41.8925,12.4985], wiki:'Baths_of_Trajan',
+  t:'Huge bath complex (AD 109) built directly over Nero’s Golden House; the model for later imperial baths.'},
+ {n:'Servian Wall (Termini)', a:'Murus Servii Tullii', c:'wall', ll:[41.9012,12.5008], wiki:'Servian_Wall',
+  t:'Fragments of Rome’s Republican-era wall (4th c. BC) stand outside Termini station.'},
+ {n:'Appian Way', a:'Via Appia', c:'wall', ll:[41.8575,12.5150], wiki:'Appian_Way',
+  t:'“Queen of roads”, begun in 312 BC, running south from Rome toward Capua and Brindisi.'},
+ {n:'Circus of Maxentius', a:'Circus Maxentii', c:'spectacle', ll:[41.8553,12.5190], wiki:'Circus_of_Maxentius',
+  t:'Remarkably intact chariot circus (c. AD 309) in the emperor’s villa complex on the Appian Way.'},
+ {n:'Tomb of Caecilia Metella', a:'Mausoleum Caeciliae Metellae', c:'tomb', ll:[41.8556,12.5225], wiki:'Tomb_of_Caecilia_Metella',
+  t:'Great cylindrical tomb (c. 50 BC), later turned into a medieval fortress tower.'},
+
+ // ---- Early Christian Rome
+ {n:'Old St Peter’s & Vatican Necropolis', a:'Basilica Sancti Petri', c:'christian', ll:[41.9022,12.4534], wiki:'Old_St._Peter%27s_Basilica',
+  t:'Constantine built his basilica (c. AD 320) over a pagan cemetery and the traditional tomb of St Peter.'},
+ {n:'Lateran Basilica', a:'Basilica Constantiniana', c:'christian', ll:[41.8858,12.5059], wiki:'Archbasilica_of_Saint_John_Lateran',
+  t:'Rome’s first great Christian church (AD 324), on land of the imperial Lateran palace.'},
+ {n:'Basilica of San Clemente', a:'Basilica Sancti Clementis', c:'christian', ll:[41.8893,12.4988], wiki:'Basilica_of_San_Clemente,_Rome',
+  t:'A medieval church above a 4th-century church, above a Roman house and a Mithraic temple.'}
+];
+
+// ---------------------------------------------------------------- markers
+const groups = {};
+const hidden = new Set();
+for (const k in CATS) groups[k] = L.layerGroup().addTo(map);
+
+const cache = {};
+async function wikiSummary(title) {
+  if (cache[title]) return cache[title];
+  try {
+    const r = await fetch('https://en.wikipedia.org/api/rest_v1/page/summary/' + title);
+    if (!r.ok) throw 0;
+    return cache[title] = await r.json();
+  } catch { return cache[title] = {}; }
+}
+
+function popupHtml(p, img) {
+  const url = 'https://en.wikipedia.org/wiki/' + p.wiki;
+  return `<div class="popup">
+    ${img ? `<img src="${img}" alt="${p.n}">` : ''}
+    <h3>${p.n}</h3><div class="anc">${p.a}</div>
+    <p>${p.t}</p>
+    <a href="${url}" target="_blank" rel="noopener">Read more on Wikipedia →</a></div>`;
+}
+
+for (const p of POIS) {
+  const col = CATS[p.c].color;
+  const m = L.circleMarker(p.ll, { radius:9, color:'#fff', weight:2, fillColor:col, fillOpacity:.95, pane:'markerPane' });
+  m.bindTooltip(p.n, { direction:'top', offset:[0,-6] });
+  m.bindPopup(popupHtml(p), { maxWidth:270 });
+  m.on('popupopen', async () => {
+    const s = await wikiSummary(p.wiki);
+    const img = s.thumbnail && s.thumbnail.source;
+    if (img && m.isPopupOpen()) m.setPopupContent(popupHtml(p, img));
+  });
+  m.addTo(groups[p.c]);
+}
+
+// ---------------------------------------------------------------- legend
+const legend = document.getElementById('legend');
+for (const k in CATS) {
+  const d = document.createElement('div');
+  d.innerHTML = `<span class="dot" style="background:${CATS[k].color}"></span>${CATS[k].label}`;
+  d.onclick = () => {
+    if (hidden.has(k)) { hidden.delete(k); groups[k].addTo(map); d.classList.remove('off'); }
+    else { hidden.add(k); map.removeLayer(groups[k]); d.classList.add('off'); }
+  };
+  legend.appendChild(d);
+}
+
+// ---------------------------------------------------------------- opacity slider
+document.getElementById('op').addEventListener('input', e => modern.setOpacity(e.target.value / 100));
+
+// ---------------------------------------------------------------- ancient Rome from OpenHistoricalMap
+const status = document.getElementById('status');
+const yearSlider = document.getElementById('year');
+const yearLabel = document.getElementById('yearLabel');
+const OHM_BBOX = '41.855,12.440,41.915,12.525';
+const CACHE_KEY = 'romemap-ohm-v1';
+let ohmData = null;
+let ancientLayer = null;
+
+// "-337", "0050", "312-10-28" -> year as a number (null if unparseable)
+function yr(s) {
+  if (!s) return null;
+  const m = /^(-?)(\d{1,4})/.exec(String(s).trim());
+  return m ? (m[1] ? -1 : 1) * parseInt(m[2], 10) : null;
+}
+const fmtYear = y => y < 0 ? (-y) + ' BC' : 'AD ' + y;
+
+function featureStyle(f) {
+  const t = f.properties;
+  if (t.barrier === 'city_wall' || t.historic === 'citywalls') return { color:'#4a3a28', weight:4, opacity:.95 };
+  if (t.man_made === 'aqueduct' || t.waterway || t.natural === 'water') return { color:'#2f7ea1', weight:2.5, opacity:.9, fillColor:'#6fb3d2', fillOpacity:.5 };
+  if (t.highway) return { color:'#8a6d3b', weight: t.highway === 'primary' || t.highway === 'secondary' ? 3 : 1.6, opacity:.9 };
+  if (t.leisure === 'stadium' || t.building === 'stadium') return { color:'#8e2a1c', weight:1.5, fillColor:'#c4553d', fillOpacity:.6 };
+  if (t.landuse || t.leisure === 'park' || t.leisure === 'garden') return { color:'#6b8e4e', weight:1, fillColor:'#a9c48a', fillOpacity:.35 };
+  return { color:'#7a3a1e', weight:1.2, fillColor:'#c8744a', fillOpacity:.55 };
+}
+
+function ancientPopup(t) {
+  const name = t['name:en'] || t.name || 'Unnamed structure';
+  const la = t['name:la'] && t['name:la'] !== name ? `<div class="anc">${t['name:la']}</div>` : '';
+  const s = yr(t.start_date), e = yr(t.end_date);
+  const dates = (s !== null ? 'Built ' + fmtYear(s) : '') + (e !== null ? (s !== null ? ' · ' : '') + 'until ' + fmtYear(e) : '');
+  let link = '';
+  if (t.wikipedia && /^[a-z-]+:/.test(t.wikipedia)) {
+    const [lang, ...rest] = t.wikipedia.split(':');
+    link = `<a target="_blank" rel="noopener" href="https://${lang}.wikipedia.org/wiki/${encodeURIComponent(rest.join(':').replace(/ /g,'_'))}">Read more on Wikipedia →</a>`;
+  }
+  return `<div class="popup"><h3>${name}</h3>${la}<p>${dates}</p>${link}</div>`;
+}
+
+function renderAncient() {
+  if (!ohmData) return;
+  const Y = parseInt(yearSlider.value, 10);
+  yearLabel.textContent = fmtYear(Y);
+  if (ancientLayer) map.removeLayer(ancientLayer);
+  let n = 0;
+  ancientLayer = L.geoJSON(ohmData, {
+    pane: 'ancient',
+    filter: f => {
+      const t = f.properties;
+      if (f.geometry.type === 'Point' || t.boundary || t.place || t.type === 'chronology') return false;
+      const s = yr(t.start_date), e = yr(t.end_date);
+      const ok = s !== null && s <= Y && (e === null || e > Y);
+      if (ok) n++;
+      return ok;
+    },
+    style: featureStyle,
+    onEachFeature: (f, l) => {
+      const t = f.properties;
+      const name = t['name:en'] || t.name;
+      if (name) l.bindTooltip(name, { sticky:true });
+      l.bindPopup(ancientPopup(t), { maxWidth:260 });
+    }
+  }).addTo(map);
+  status.textContent = n + ' ancient features shown';
+}
+
+async function loadAncient() {
+  try { ohmData = JSON.parse(localStorage.getItem(CACHE_KEY) || 'null'); } catch {}
+  if (!ohmData) {
+    status.textContent = 'Loading ancient Rome from OpenHistoricalMap…';
+    const RE = '^(-[0-9]+|0[0-9]{3}|[0-9]{1,3})($|-)';   // start_date before AD 1000
+    const q = `[out:json][timeout:90];(
+      way["start_date"~"${RE}"](${OHM_BBOX});
+      relation["start_date"~"${RE}"](${OHM_BBOX});
+    );out body;>;out skel qt;`;
+    try {
+      const r = await fetch('https://overpass-api.openhistoricalmap.org/api/interpreter', { method:'POST', body:'data=' + encodeURIComponent(q) });
+      if (!r.ok) throw new Error('HTTP ' + r.status);
+      ohmData = osmtogeojson(await r.json());
+      try { localStorage.setItem(CACHE_KEY, JSON.stringify(ohmData)); } catch {}
+    } catch (err) {
+      status.textContent = 'Could not load ancient layer (' + err.message + '). POIs still work.';
+      return;
+    }
+  }
+  renderAncient();
+}
+yearSlider.addEventListener('input', renderAncient);
+loadAncient();
+
+// ---------------------------------------------------------------- optional: surviving ruins from OSM
+let osmRuins = null;
+document.getElementById('ruins').addEventListener('change', async e => {
+  if (!e.target.checked) { if (osmRuins) map.removeLayer(osmRuins); return; }
+  if (osmRuins) { osmRuins.addTo(map); return; }
+  const q = `[out:json][timeout:60];(way["historic"~"^(archaeological_site|ruins)$"](${OHM_BBOX});relation["historic"~"^(archaeological_site|ruins)$"](${OHM_BBOX}););out body;>;out skel qt;`;
+  try {
+    const r = await fetch('https://overpass-api.de/api/interpreter', { method:'POST', body:'data=' + encodeURIComponent(q) });
+    osmRuins = L.geoJSON(osmtogeojson(await r.json()), {
+      pane:'ancient', filter:f => f.geometry.type !== 'Point',
+      style:{ color:'#222', weight:1, dashArray:'3 3', fillOpacity:0 },
+      onEachFeature:(f,l)=>{ const n=f.properties.name; if(n) l.bindTooltip(n,{sticky:true}); }
+    }).addTo(map);
+  } catch { e.target.checked = false; }
+});
+</script>
+</body>
+</html>
