@@ -58,6 +58,10 @@
   <input type="range" id="op" min="0" max="100" value="55">
   <div class="row"><span>Ancient only</span><span>Modern only</span></div>
 
+  <label for="aop">Ancient Rome opacity</label>
+  <input type="range" id="aop" min="0" max="100" value="100">
+  <div class="row"><span>Hidden</span><span>Solid</span></div>
+
   <label for="year">Year: <span id="yearLabel">AD 250</span></label>
   <input type="range" id="year" min="-100" max="450" step="10" value="250">
   <div class="row"><span>100 BC</span><span>AD 450</span></div>
@@ -273,6 +277,8 @@ L.DomEvent.disableScrollPropagation(panel);
 
 // ---------------------------------------------------------------- opacity slider
 document.getElementById('op').addEventListener('input', e => modern.setOpacity(e.target.value / 100));
+// Ancient layer opacity: applied to the whole pane, so it survives year-slider redraws
+document.getElementById('aop').addEventListener('input', e => { map.getPane('ancient').style.opacity = e.target.value / 100; });
 
 // ---------------------------------------------------------------- ancient Rome from OpenHistoricalMap
 const status = document.getElementById('status');
